@@ -1,42 +1,56 @@
 # Private Self-Adapting Learning Agent
 
-One tutor, one continuous relationship. The learner talks naturally; the agent adapts around the
-conversation using a two-timescale memory that learns from evidence and stays revisable.
+Tell it what you want to learn in plain language — *"I want to learn Bash"*, *"Teach me OOP"*, *"I want to learn Rust, especially ownership"* — and the agent interprets the goal, investigates the subject if it has never taught it, builds a prerequisite graph, diagnoses what you already know, teaches, observes how you respond, and continuously adapts **while keeping a persistent, inspectable model of you**.
 
-## Architecture (src/)
+## What it does (verified by `scripts/simulate.mjs` against the running app)
 
-```
-agent/perceive.ts   what happened this turn (intent, lightly-interpreted observations, answer grading)
-memory/index.ts     working memory (observations) → consolidation → beliefs (LTM, prior not verdict)
-                    BKT-style knowledge state from demonstrated evidence; graph touch/reinforce; dormancy
-agent/policy.ts     style choice (present > working memory > scoped beliefs > default), next concept,
-                    probe decision (value of information × disruption budget)
-agent/compose.ts    offline response composer (no visible "modes")
-agent/run.ts        one turn: perceive → record → consolidate → context → decide → respond → learn
-knowledge/          seed domain packs + open-domain research (LLM → Wikipedia sections → learner)
-llm/                OpenAI-compatible / Anthropic providers; offline engine when no key is set
-lab/                synthetic learners with hidden traits, ablations, long-horizon runs
-```
+| Capability | Mechanism | Evidence from harness |
+|---|---|---|
+| Understand the goal | heuristic parser (LLM when configured): subject, level, focus terms | `"Bash, I already know the basics"` → subject *Bash*, level *intermediate* |
+| Investigate unknown subjects | Wikipedia research: learnability-ranked disambiguation, section structure → concepts, lead-definition links → prerequisites, text-reference → prerequisite edges, exercise synthesis (definition matching, cloze, T/F) | photosynthesis → 14 concepts, 17 edges, 56 exercises; *Rust ownership* → Rust (programming language), not iron oxide |
+| Curated expertise + latent knowledge | Bash & OOP packs with 5 explanation styles and misconception-tagged exercises; latent concepts activated only when a gap appears | word-splitting discovered from quoting errors, linked as prerequisite, taught, then return |
+| Diagnose | adaptive bisection over the topological order, self-report shortcuts | expert: 4 probes → all 10 concepts mastered in 21 steps |
+| Mastery beliefs with uncertainty | Bayesian Knowledge Tracing + Beta pseudo-counts; basis ∈ prior / inferred / demonstrated; evidence propagates to prerequisites | 24 inference events in one session |
+| Learn *how to teach you* | Thompson sampling over explanation strategies, global + per-domain scopes, sharpened once evidence is strong; explicit feedback also rewards/penalises | example-dependent learner → concrete_example 0.85–0.92; preference carries into a new subject (7/7) |
+| Verify adaptations | every strategy switch is a logged decision whose *outcome* is filled in by the next answer | `verify_adaptation` decisions with worked / did not work |
+| Detect and fill gaps | misconception → prerequisite probe, or graph extension (latent → LLM → web research) | `extend_graph` decisions; "what is chlorophyll?" → researched & added |
+| Affect | frustration / confusion / engagement / fatigue / confidence from streaks, latency vs. personal baseline, hints, feedback buttons, lexical cues; drives re-explanation, easier items, skip-ahead, break suggestions | 15 `affect_response` decisions for a frustrated learner |
+| Give up gracefully | after every style has failed: `strategy_exhausted` → essentials + simplest item + invitation to ask about unknown terms | |
+| Persist everything | append-only evidence, mutable beliefs, traits with confidence & rationale, affect timeline, decision log | sessions resume with beliefs intact |
+| Interoperate | MCP Streamable HTTP at `POST /api/mcp` | 11 tools exercised end-to-end |
 
-Key principles implemented:
-- **Observation before interpretation**: observations store *what happened*; interpretations are tentative.
-- **Beliefs are priors**: confidence = beta-like(support, contradictions); promotion needs cross-session
-  confirmation; contradictions demote; 3 consecutive contradictions retire (never delete) and link a successor.
-- **Context-specific**: beliefs are scoped (`*`, `domain:x`, `activity:y`); specific scopes outrank global.
-- **Behaviour over self-report**: stated preferences are honored now but weighed against outcomes;
-  claims set `claimed`, never `p_known`; exposure alone caps p_known at 0.45.
-- **Frequency ≠ meaning**: `touch_count` is recorded but never used in decisions.
-- **Probing is rationed**: a check requires meaningful uncertainty that affects the next step and a budget.
-- **Dormancy is reversible**: read-time recency weighting, dormant status, automatic reactivation.
+## Intelligence modes
 
-## Running
+* **No API key (default here):** built-in reasoner + live web research. All adaptive machinery is fully active.
+* **`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`:** LLM used for goal interpretation, research-grounded curriculum synthesis for any subject, free-text grading, open Q&A, and LLM-generated gap concepts. Optional `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` (path verified with a mock OpenAI-compatible endpoint).
+
+## Architecture
 
 ```
-npm run dev                      # app (offline engine unless OPENAI_API_KEY / ANTHROPIC_API_KEY set)
-npx tsx --env-file=.env src/lab/run.ts --name=abl_none --seeds=1,2,3 --sessions=8 --turns=10
-LA_ABLATION=no_ltm npx tsx --env-file=.env src/lab/run.ts --name=abl_no_ltm --ablation=no_ltm
-npx tsx --env-file=.env src/lab/longhorizon.ts
+src/lib/agent/
+  intelligence.ts   LLM provider abstraction with deterministic fallbacks
+  research.ts       Wikipedia investigation, ranking/disambiguation, exercise & explanation synthesis
+  packs/            curated expertise (bash, oop) incl. latent concepts
+  domain.ts         goal interpretation → domain build (existing/curated/LLM/research) → graph extension
+  mastery.ts        BKT + Beta uncertainty, prerequisite propagation, self-reports
+  strategy.ts       Thompson-sampling strategy bandit, learner traits
+  affect.ts         affect estimation from behavioural + explicit signals
+  tutor.ts          the agent loop: diagnose → teach → observe → update → verify → re-plan
+  learner-model.ts  inspectable snapshots (UI + MCP)
+src/app/api/        goals, turns, learner, mcp
+src/db/schema.ts    learners, domains, concepts, prerequisites, goals, mastery_beliefs,
+                    evidence_events, strategy_stats, learner_traits, affect_states,
+                    sessions, turns, agent_decisions
 ```
-Results are stored in `lab_runs` and shown at `/lab`. Transcripts land in `lab-results/`.
 
-Env: `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`), or `ANTHROPIC_API_KEY` (+ `ANTHROPIC_MODEL`).
+## MCP
+
+Stateless Streamable HTTP endpoint: `POST /api/mcp`. Tools: `create_learner`, `get_learner_state`, `list_goals`, `create_goal`, `get_concept_graph`, `get_mastery`, `get_recommendation`, `tutoring_turn`, `get_interaction_history`, `record_evidence`, `extend_graph`. Resource: `pal://schema/learner-model`.
+
+## Testing
+
+```
+node scripts/simulate.mjs          # BASE=http://localhost:3000 by default
+```
+
+Simulates an expert, a prerequisite-gap learner, an example-dependent learner (then a second subject), a frustrated learner, an open-domain subject, and an MCP client — 30 behavioural checks against the real API and database.
