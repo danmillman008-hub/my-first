@@ -5,12 +5,12 @@
 SCENES['96_neon_rain'] = (() => {
   const W = 1920, H = 1080, TAU = Math.PI * 2;
   const { clamp, lerp } = U, P = PAINT;
-  let HERO = null;
+  const SPR = {};   // { stand, walk[4] } فریم‌های کلیدشده+کراپ‌شده
 
   const camAt = (t) => {
     if (t < 9) { const q = U.ease.inOut(clamp(t / 9)); return { x: lerp(940, 1010, q), y: lerp(560, 585, q), z: lerp(1.05, 1.16, q), rot: 0, beat: 0, lt: t }; }
     const lt = t - 9, q = U.ease.inOut(clamp(lt / 1.2));
-    return { x: lerp(1010, 1240, q), y: lerp(585, 620, q), z: lerp(1.16, 1.42, q), rot: -0.012, beat: 1, lt };
+    return { x: lerp(1010, 1330, q), y: lerp(585, 620, q), z: lerp(1.16, 1.42, q), rot: -0.012, beat: 1, lt };
   };
   // لایه با عمق p: ترجمه کمتر/بیشتر + زوم کمی متفاوت → عمق از صفحهٔ تخت
   const layer = (c, cam, p, fn) => {
@@ -74,20 +74,28 @@ SCENES['96_neon_rain'] = (() => {
   return {
     init(IMG) {
       U.assertGlyphs('Vazirmatn-Medium', 'شبِ نئون تهران ۲۰۷ ادامه دارد… بازسازی یک سکانس سینمایی', '96_neon_rain');
-      // ---- کلید پردهٔ سبز (یک‌بار) ----
-      const src = IMG['img/hero_green.png'];
-      const cv = document.createElement('canvas'); cv.width = src.width; cv.height = src.height;
-      const g = cv.getContext('2d', { willReadFrequently: true });
-      g.drawImage(src, 0, 0);
-      const im = g.getImageData(0, 0, cv.width, cv.height), d = im.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], gg = d[i + 1], b = d[i + 2], gn = gg - Math.max(r, b);
-        if (gn > 42) d[i + 3] = 0;
-        else if (gn > 16) d[i + 3] = Math.round(255 * (1 - (gn - 16) / 26));
-        if (d[i + 3] > 0 && gg > Math.max(r, b)) d[i + 1] = Math.min(gg, Math.max(r, b) + 26);   // despill
-      }
-      g.putImageData(im, 0, 0);
-      HERO = cv;
+      // کلید پردهٔ سبز + برش bounding-box برای همهٔ فریم‌ها (یک‌بار) تا تعویض فریم نپر
+      const key = (src) => {
+        const cv = document.createElement('canvas'); cv.width = src.width; cv.height = src.height;
+        const g = cv.getContext('2d', { willReadFrequently: true });
+        g.drawImage(src, 0, 0);
+        const im = g.getImageData(0, 0, cv.width, cv.height), d = im.data;
+        let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], gg = d[i + 1], b = d[i + 2], gn = gg - Math.max(r, b);
+          if (gn > 42) d[i + 3] = 0;
+          else if (gn > 16) d[i + 3] = Math.round(255 * (1 - (gn - 16) / 26));
+          if (d[i + 3] > 0 && gg > Math.max(r, b)) d[i + 1] = Math.min(gg, Math.max(r, b) + 26);
+          if (d[i + 3] > 12) { const p = i / 4, px = p % cv.width, py = (p / cv.width) | 0;
+            if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py; }
+        }
+        g.putImageData(im, 0, 0);
+        const w = x1 - x0 + 1, h = y1 - y0 + 1, cc = document.createElement('canvas');
+        cc.width = w; cc.height = h; cc.getContext('2d').drawImage(cv, x0, y0, w, h, 0, 0, w, h);
+        return { cv: cc, w, h };
+      };
+      SPR.stand = key(IMG['img/hero_green.png']);
+      SPR.walk = ['img/hero_walk1.png', 'img/hero_walk2.png', 'img/hero_walk3.png', 'img/hero_walk4.png'].map(f => key(IMG[f]));
     },
     draw(c, lt0, t) {
       const cam = camAt(t), IM = window.IMG;
@@ -115,12 +123,23 @@ SCENES['96_neon_rain'] = (() => {
       });
       // L3.5 ماشین‌های پرنده
       layer(c, cam, 1.02, () => cars(c, t));
-      // L4 قهرمان + انعکاس
+      // L4 قهرمان: سیکل قدم + حرکت در صحنه (نمای A) / ایستادن+تنفس (نمای B)
       layer(c, cam, 1.12, () => {
-        const s = 800 / HERO.height, hx = 1250, fy = 1005 + Math.sin(t * 1.4) * 1.5;
-        c.save(); c.globalAlpha = 0.22; c.translate(hx, fy + 6); c.scale(s, -s * 0.42); c.drawImage(HERO, -HERO.width / 2, 0); c.restore();
-        c.save(); c.translate(hx, fy); c.scale(s, s); c.drawImage(HERO, -HERO.width / 2, -HERO.height); c.restore();
-        c.save(); c.globalAlpha = 0.5; c.strokeStyle = 'rgba(190,220,255,.5)'; c.lineWidth = 2;   // چکه از چتر
+        const walking = cam.beat === 0;
+        const spr = walking ? SPR.walk[Math.floor(t * 4.6) % 4] : SPR.stand;
+        const hx = walking ? 860 + t * 54 : 860 + 9 * 54;
+        const s = 800 / spr.h;
+        const bob = walking ? Math.abs(Math.sin(t * 4.6 * Math.PI / 2)) * -5 : Math.sin(t * 1.6) * 2;
+        const fy = 1005 + bob;
+        const lean = walking ? 0.025 : 0.006 * Math.sin(t * 0.9);
+        // انعکاس
+        c.save(); c.globalAlpha = 0.22; c.translate(hx, fy + 8); c.scale(s, -s * 0.42); c.rotate(-lean);
+        c.drawImage(spr.cv, -spr.w / 2, 0); c.restore();
+        // خودِ کاراکتر
+        c.save(); c.translate(hx, fy); c.rotate(lean); c.scale(s, s * (walking ? 1 : 1 + 0.005 * Math.sin(t * 1.9)));
+        c.drawImage(spr.cv, -spr.w / 2, -spr.h); c.restore();
+        // چکه از چتر
+        c.save(); c.strokeStyle = 'rgba(190,220,255,.5)'; c.lineWidth = 2;
         for (let i = 0; i < 3; i++) { const q = (t * 1.4 + i * 0.37) % 1, dx = hx - 118 + i * 96; c.globalAlpha = (1 - q) * 0.5; c.beginPath(); c.moveTo(dx, fy - 470 + q * 60); c.lineTo(dx, fy - 462 + q * 60); c.stroke(); }
         c.restore();
       });
