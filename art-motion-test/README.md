@@ -7,6 +7,9 @@ agent-TTY ندارد، کلونِ مستقیم + overlay معادلِ همان �
 
 ## چی ساخته شد
 
+- **انیمیشن پیکسلی «قدم زدن در پارک»** (`film/eras_walk.js` + `film/scenes/98_pixel_park.js`):
+  پسر و سگش با قلاده از چپ به راست؛ چرخهٔ قدم پله‌ای، دمِ تکان‌خور، ابر و پرنده و پروانهٔ متحرک.
+  خروجی: `renders/pixel-park-walk.mp4` و پیش‌نمایش زنده `/index.html?film=walk`.
 - **فیلم تست** (`film/eras_test.js`): چهار دوره — Post-Impressionism → 8-bit → Bauhaus →
   سبک سفارشی **«کاشی صفوی»** (`film/scenes/99_persian.js`: ایوان، شمسهٔ چرخان، مناره‌ها،
   حوض با انعکاس موج‌دار، گذار mosaic). همه با همان کتابخانه‌های خود skill
