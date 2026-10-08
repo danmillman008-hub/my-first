@@ -1,75 +1,85 @@
-// 96_neon_rain — «شبِ نئون»: بازسازی یک سکانس سینمایی فوق‌رئال با است‌های تولیدی (هوش مصنوعی)
-// + کامپوزیت و حرکتِ کدی: کلیدِ پردهٔ سبز (نمای نزدیک)، پارالاکسِ لایه‌های تخت (۲.۵بعدی)، باران دولایه، مه،
-// ماشین‌های پرنده، جارو نور، سوسوی نئون، انعکاس پویای تابلوها در آبِ کف خیابان، دو نما با برش،
-// لترباکس + گرین + وینیت. بدون getImageData در حلقهٔ فریم (کلید فقط یک‌بار در init).
-// نمای A: «تراولینگ‌شات» — کاراکتر با ریگ اسکلتی رویه‌ای (۲۴fps) راه می‌رود و دوربین دنبال می‌کند؛
-// شهر با کاشی آینه‌ای بی‌نهایت اسکرول می‌شود. سرعت = طولِ گام × کادنس (بدون سُرخوردن پا).
-// نمای B: استِ فوتورئالِ تولیدی (ایستاده + تنفس ظریف).
+// 96_neon_rain — «شبِ نئون»: بازسازی یک سکانس سینمایی فوق‌رئال
+// محیط: است‌های فتورئال تولیدی (هوش مصنوعی) + کامپوزیت کدی (باران دولایه، مه، ماشین پرنده،
+// سوسوی نئون، انعکاس آب کف خیابان، لترباکس/گرین/وینیت).
+// کاراکتر: ریگ اسکلتی رویه‌ای تمام‌کدی — پاهای دو-مفصلی با IK و فازِ کف‌پا روی زمین،
+// گام‌های کوتاهِ احتیاطی زیر باران، تابِ مخالف دست‌ها، بوب عمودی، دنبالهٔ لبهٔ بارانی،
+// چتر با چکه، سیلوئتِ شب با ریملایت نئون + انعکاس خیس. دوربین: تراکینگ‌شات واقعی
+// (دنیای پشت سر با mirror-wrap جریان دارد) و کات به نمای نزدیکِ ایستاده.
 SCENES['96_neon_rain'] = (() => {
   const W = 1920, H = 1080, TAU = Math.PI * 2;
   const { clamp, lerp } = U, P = PAINT;
-  const SPR = {};   // { stand } استِ کلیدشده+کراپ‌شده برای نمای نزدیک
 
-  const HERO_V = 430;                                  // سرعت راه‌رفتن (واحد دنیا/ثانیه)
+  // ---------------- حرکت جهانی قهرمان + دوربین ----------------
+  const VMAX = 225, T1 = 7.8, T2 = 8.9, DEC = T2 - T1;
+  const speedAt = (t) => t < T1 ? VMAX : t < T2 ? VMAX * (1 - (t - T1) / DEC) : 0;
+  const heroX = (t) => {
+    if (t <= T1) return 700 + VMAX * t;
+    const d1 = VMAX * T1;
+    if (t <= T2) { const q = t - T1; return 700 + d1 + VMAX * q - (VMAX / (2 * DEC)) * q * q; }
+    return 700 + d1 + VMAX * DEC / 2;
+  };
+  const EX = heroX(99); // جای ایستادن بعد از ترمز
   const camAt = (t) => {
     if (t < 9) {
       const q = U.ease.inOut(clamp(t / 9));
-      const heroX = 880 + HERO_V * t;
-      return { x: heroX + 90, y: lerp(600, 640, q), z: lerp(1.02, 1.08, q), rot: 0, beat: 0, lt: t, heroX };
+      return {
+        x: heroX(t) + 150 + Math.sin(t * 1.55) * 3 + Math.sin(t * 2.7 + 1) * 2,
+        y: 575 + Math.sin(t * 0.9) * 5, z: lerp(1.05, 1.14, q), rot: 0, beat: 0, lt: t, v: speedAt(t),
+      };
     }
     const lt = t - 9, q = U.ease.inOut(clamp(lt / 1.2));
-    return { x: lerp(880 + HERO_V * 9 + 90, 1330, q), y: lerp(640, 620, q), z: lerp(1.08, 1.42, q), rot: -0.012, beat: 1, lt, heroX: 0 };
+    return { x: lerp(EX + 150, EX + 215, q), y: lerp(585, 618, q), z: lerp(1.14, 1.42, q), rot: -0.012, beat: 1, lt, v: 0 };
   };
-  // لایه با عمق p: ترجمه کمتر/بیشتر + زوم کمی متفاوت → عمق از صفحهٔ تخت
   const layer = (c, cam, p, fn) => {
     c.save(); c.translate(W / 2, H / 2); c.scale(cam.z * (1 + (p - 1) * 0.35), cam.z * (1 + (p - 1) * 0.35)); c.rotate(cam.rot);
     c.translate(-(cam.x * p + 960 * (1 - p)), -(cam.y * p + 540 * (1 - p)));
     fn(); c.restore();
   };
   const cover = (im) => Math.max(W / im.width, H / im.height) * 1.12;
-  // کاشی آینه‌ای افقی: تصویر + نسخهٔ قرینه → اسکرول بی‌نهایت بدون درزِ سخت
-  function mtile(c, cam, p, img, dw, dh, y) {
-    const per = 2 * dw, sc = cam.z * (1 + (p - 1) * 0.35);
-    const cx = cam.x * p + 960 * (1 - p), half = (W / 2) / sc + dw;
-    const x0 = Math.floor((cx - half) / per) * per;
-    for (let x = x0; x < cx + half; x += per) {
-      c.drawImage(img, x, y, dw, dh);
-      c.save(); c.translate(x + 2 * dw, y); c.scale(-1, 1); c.drawImage(img, 0, 0, img.width, img.height, 0, 0, dw, dh); c.restore();
+  // کاشی افقی یک است در فضای لایه (آینه‌ای برای عکس، تکراری برای png شفاف)
+  const wrapImg = (c, cam, p, img, dx, dy, dw, dh, mirror) => {
+    const z = cam.z * (1 + (p - 1) * 0.35);
+    const off = cam.x * p + 960 * (1 - p);
+    const half = (W / 2) / z + 90;
+    const period = mirror ? dw * 2 : dw;
+    const v0 = off - half - dx, v1 = off + half - dx;
+    for (let x = Math.floor(v0 / period) * period; x < v1; x += period) {
+      if (mirror) {
+        c.drawImage(img, dx + x, dy, dw, dh);
+        c.save(); c.translate(dx + x + dw * 2, dy); c.scale(-1, 1); c.drawImage(img, 0, 0, dw, dh); c.restore();
+      } else c.drawImage(img, dx + x, dy, dw, dh);
     }
-  }
+  };
 
-  // باران: قطره‌های کج با باد + برخورد به زمین (حول cx پنجرهٔ دید)
-  function rain(c, t, n, spd, len, alpha, seed, cx) {
+  // ---------------- باران / مه / ماشین‌ها ----------------
+  function rain(c, cam, t, n, spd, len, alpha, seed) {
     c.save(); c.lineCap = 'round'; c.strokeStyle = `rgba(190,220,255,${alpha})`;
     for (let i = 0; i < n; i++) {
       const h1 = U.hash(i, seed), h2 = U.hash(i, seed + 1);
-      const vx = 260 + h1 * 240, x = cx - 1400 + ((h2 * 2800 + t * vx * 0.35) % 2800), y = ((h1 * 1400 + t * (700 + h2 * 500) * spd) % 1400) - 160;
+      const vx = 260 + h1 * 240, x = ((h2 * 2400 + t * vx * 0.35) % 2400) - 240, y = ((h1 * 1400 + t * (700 + h2 * 500) * spd) % 1400) - 160;
       c.lineWidth = 1.4 + h1 * 1.4;
       c.beginPath(); c.moveTo(x, y); c.lineTo(x - len * 0.22, y + len); c.stroke();
     }
     c.restore();
   }
-  function splashes(c, t, cx) {
+  function splashes(c, t) {
     c.save(); c.strokeStyle = 'rgba(200,230,255,.4)'; c.lineWidth = 2;
     for (let i = 0; i < 26; i++) {
-      const h = U.hash(i, 77), q = (t * 2.2 + h * 3) % 1, x = cx - 1300 + h * 2600, y = 900 + U.hash(i, 5) * 160;
+      const h = U.hash(i, 77), q = (t * 2.2 + h * 3) % 1, x = h * 2200 - 140, y = 900 + U.hash(i, 5) * 160;
       if (q < 0.5) { c.globalAlpha = (1 - q * 2) * 0.5; c.beginPath(); c.ellipse(x, y, 4 + q * 26, (4 + q * 26) * 0.28, 0, 0, TAU); c.stroke(); }
     }
     c.restore();
   }
-  // مه: کاشی دود با blend افزایشی حول پنجرهٔ دید
-  function fog(c, cam, p, t, img, y, scale, alpha, speed, seed) {
+  function fog(c, cam, t, img, y, scale, alpha, speed, seed) {
     c.save(); c.globalCompositeOperation = 'screen'; c.globalAlpha = alpha;
     const w = img.width * scale, hh = img.height * scale;
-    const sc = cam.z * (1 + (p - 1) * 0.35), cx = cam.x * p + 960 * (1 - p), half = (W / 2) / sc + w;
-    const off = (t * speed) % (w * 0.72);
-    for (let x = cx - half - off; x < cx + half; x += w * 0.72) c.drawImage(img, x, y + Math.sin(t * 0.3 + seed + x * 0.001) * 14, w, hh);
+    const off = (t * speed) % w;
+    for (let x = -w - off; x < W + w; x += w * 0.72) c.drawImage(img, x, y + Math.sin(t * 0.3 + seed + x * 0.001) * 14, w, hh);
     c.restore();
   }
-  function cars(c, t, cx) {
-    // چراغ‌های ماشین پرنده با دنباله
+  function cars(c, t) {
     const lane = (i, y, spd, dir, colA, colB) => {
-      const q = ((t * spd + i * 0.37) % 1.4) - 0.2, x = dir > 0 ? cx - 1300 + q * 2600 : cx + 1300 - q * 2600;
+      const q = ((t * spd + i * 0.37) % 1.4) - 0.2, x = dir > 0 ? q * 2600 - 300 : 2200 - q * 2600;
       const g = c.createLinearGradient(x - dir * 220, y, x, y);
       g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, colA);
       c.strokeStyle = g; c.lineWidth = 5; c.beginPath(); c.moveTo(x - dir * 220, y); c.lineTo(x, y); c.stroke();
@@ -78,8 +88,7 @@ SCENES['96_neon_rain'] = (() => {
     lane(0, 300, 0.16, 1, 'rgba(255,190,120,.7)', '#ffe9c8');
     lane(1, 342, 0.11, -1, 'rgba(255,90,90,.6)', '#ffd0c8');
     lane(2, 262, 0.2, 1, 'rgba(120,220,255,.55)', '#e8fbff');
-    // اسپینرِ نزدیک‌تر با چشمک و جارو نور
-    const sx = cx - 1300 + ((t * 0.07) % 1.3) * 2600, sy = 210 + Math.sin(t * 0.8) * 8;
+    const sx = ((t * 0.07) % 1.3) * 2600 - 300, sy = 210 + Math.sin(t * 0.8) * 8;
     c.save(); c.globalAlpha = 0.9;
     c.fillStyle = '#1a222c'; c.beginPath(); c.ellipse(sx, sy, 34, 10, 0, 0, TAU); c.fill();
     c.fillStyle = Math.floor(t * 3) % 2 ? '#ff5040' : '#701818'; c.beginPath(); c.arc(sx - 30, sy, 3.4, 0, TAU); c.fill();
@@ -90,173 +99,207 @@ SCENES['96_neon_rain'] = (() => {
     c.restore();
   }
 
-  // ---------- ریگ اسکلتی راه‌رفتن (نمای جانبی، رو به راست) ----------
-  // گیت واقعی: ران کورسینوسی + خمِ زانو در فازswing + قفلِ پا به زمین + بُب عمودی طبیعی
-  function walker(c, x, t) {
-    const Gy = 1005, Lt = 175, Ls = 165, cad = 2.0, p = t * cad * Math.PI;
-    const cap = (x0, y0, x1, y1, w, col) => { c.strokeStyle = col; c.lineWidth = w; c.lineCap = 'round'; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); };
-    const leg = (a) => {
-      const th = 0.36 * Math.sin(a) + 0.06;                       // ران
-      const kn = 0.10 + 0.95 * Math.max(0, Math.sin(a - 0.5));    // خم زانو (اوج در swing)
-      const sh = th - kn;
-      const kx = Math.sin(th) * Lt, ky = Math.cos(th) * Lt;
-      const fa = 0.10 + 0.22 * Math.max(0, Math.sin(a + 0.9));    // پنجه‌پایینی در swing
-      return { kx, ky, fx: kx + Math.sin(sh) * Ls, fy: ky + Math.cos(sh) * Ls, fa };
-    };
-    const A = leg(p), B = leg(p + Math.PI);
-    const hipY = Gy - Math.max(A.fy, B.fy);                       // پایین‌ترین پا همیشه روی زمین
-    const hipX = x;
-    // سایهٔ خیس
-    c.fillStyle = 'rgba(0,0,10,.5)'; c.beginPath(); c.ellipse(hipX + 6, Gy + 8, 92, 12, 0, 0, TAU); c.fill();
-    const lean = 0.10 + 0.02 * Math.sin(p);
-    const shX = hipX + Math.sin(lean) * 205, shY = hipY - Math.cos(lean) * 205;
-    // دستِ دور (پشت بدن) swing متقابل با پای دور
-    const uaF = 0.34 * Math.sin(p + Math.PI) + 0.12;
-    const eFx = shX + Math.sin(uaF) * 92, eFy = shY + Math.cos(uaF) * 92;
-    const aF = uaF - (0.95 + 0.3 * Math.sin(p + Math.PI + 0.7));
-    cap(shX, shY, eFx, eFy, 21, '#070a10'); cap(eFx, eFy, eFx + Math.sin(aF) * 82, eFy + Math.cos(aF) * 82, 17, '#070a10');
-    // پای دور
-    cap(hipX, hipY, hipX + B.kx, hipY + B.ky, 36, '#070a10');
-    cap(hipX + B.kx, hipY + B.ky, hipX + B.fx, hipY + B.fy, 29, '#070a10');
-    c.save(); c.translate(hipX + B.fx, hipY + B.fy); c.rotate(B.fa); c.fillStyle = '#05070c'; c.beginPath(); c.roundRect(-18, -12, 84, 25, 9); c.fill(); c.restore();
-    // پالتو + تنه
-    const sway = Math.sin(p) * 9 - 7;
-    c.fillStyle = '#0b0e15';
-    cap(hipX, hipY - 20, shX, shY, 66, '#0b0e15');
-    c.beginPath(); c.moveTo(hipX - 36, hipY - 40);
-    c.quadraticCurveTo(hipX - 62 + sway, hipY + 100, hipX - 50 + sway, hipY + 188);
-    c.lineTo(hipX + 48 + sway * 0.6, hipY + 188);
-    c.quadraticCurveTo(hipX + 48, hipY + 40, hipX + 36, hipY - 40); c.closePath(); c.fill();
-    c.beginPath(); c.arc(shX, shY, 36, 0, TAU); c.fill();
-    // پای نزدیک (جلوی پالتو)
-    cap(hipX, hipY, hipX + A.kx, hipY + A.ky, 38, '#0e1219');
-    cap(hipX + A.kx, hipY + A.ky, hipX + A.fx, hipY + A.fy, 31, '#0e1219');
-    c.save(); c.translate(hipX + A.fx, hipY + A.fy); c.rotate(A.fa); c.fillStyle = '#06080d'; c.beginPath(); c.roundRect(-18, -13, 86, 26, 10); c.fill(); c.restore();
-    // برق لبهٔ پالتو: پشت سرخابی، جلو فیروزه‌ای (نور نئون)
-    cap(hipX - 32, hipY - 6, shX - 30, shY + 8, 4.5, 'rgba(255,80,190,.34)');
-    cap(shX + 31, shY + 10, hipX + 36, hipY - 2, 4, 'rgba(110,230,255,.30)');
-    c.strokeStyle = 'rgba(110,230,255,.22)'; c.lineWidth = 3;
-    c.beginPath(); c.moveTo(hipX - 48 + sway, hipY + 184); c.lineTo(hipX + 46 + sway * 0.6, hipY + 184); c.stroke();
-    // سر + مو (گوجه‌ای پشت سر)
-    const hdX = shX + Math.sin(lean + 0.05) * 62, hdY = shY - Math.cos(lean + 0.05) * 62;
-    c.fillStyle = '#0b0e15'; c.beginPath(); c.arc(hdX, hdY, 42, 0, TAU); c.fill();
-    c.beginPath(); c.arc(hdX - 36, hdY - 16, 17, 0, TAU); c.fill();
-    c.strokeStyle = 'rgba(255,80,190,.3)'; c.lineWidth = 3.5; c.beginPath(); c.arc(hdX - 4, hdY - 4, 38, Math.PI * 0.75, Math.PI * 1.6); c.stroke();
-    // دستِ نزدیک: آرنج خم، دست چتر را گرفته
-    const elX = shX + Math.sin(0.5) * 92, elY = shY + Math.cos(0.5) * 92;
-    const haX = elX + Math.sin(2.5) * 88, haY = elY + Math.cos(2.5) * 88;
-    cap(shX, shY, elX, elY, 22, '#0e1219'); cap(elX, elY, haX, haY, 18, '#0e1219');
-    c.fillStyle = '#0e1219'; c.beginPath(); c.arc(haX, haY, 11, 0, TAU); c.fill();
-    // چتر: دسته + canopy با لبهٔ موج‌دار + برق فیروزه‌ای + چکه
-    const cnX = haX + 48, cnY = haY - 205;
-    c.strokeStyle = '#141a22'; c.lineWidth = 7; c.beginPath(); c.moveTo(haX, haY); c.lineTo(cnX, cnY); c.stroke();
-    c.save(); c.translate(cnX, cnY); c.rotate(0.12);
-    c.fillStyle = '#0c1017';
-    c.beginPath(); c.moveTo(-190, 16); c.quadraticCurveTo(0, -92, 190, 16);
-    c.quadraticCurveTo(141, 32, 95, 18); c.quadraticCurveTo(47, 34, 0, 20);
-    c.quadraticCurveTo(-47, 34, -95, 18); c.quadraticCurveTo(-141, 32, -190, 16); c.closePath(); c.fill();
-    c.strokeStyle = 'rgba(120,230,255,.45)'; c.lineWidth = 3.5;
-    c.beginPath(); c.moveTo(-190, 16); c.quadraticCurveTo(0, -92, 190, 16); c.stroke();
-    c.fillStyle = '#141a22'; c.fillRect(-2.5, -116, 5, 28);
-    c.restore();
-    for (let i = 0; i < 3; i++) {
-      const q = (t * 1.5 + i * 0.37) % 1, dx = cnX - 150 + i * 140;
-      c.save(); c.globalAlpha = (1 - q) * 0.5; c.strokeStyle = 'rgba(190,220,255,.6)'; c.lineWidth = 2;
-      c.beginPath(); c.moveTo(dx, cnY + 22 + q * 70); c.lineTo(dx, cnY + 30 + q * 70); c.stroke(); c.restore();
-    }
+  // ---------------- ریگ اسکلتی انسان (رویه‌ای) ----------------
+  // مختصات محلی: کف زمین y=0، بالا منفی، رو به +x. قد کل ≈ 700.
+  const RIG = { hipY: 372, shY: 556, headC: 620, headR: 40, th: 186, sh: 180, ank: 12, footL: 64, ua: 120, fa: 112, T: 1.3 };
+  function legPose(p, L, S, liftMax, standX) {
+    let fx, lift, ang;
+    if (p < 0.5) { const u = p / 0.5, su = u * u * (3 - 2 * u); fx = L * (0.5 - u); lift = 0; ang = lerp(-0.2, 0.34, su); }
+    else { const u = (p - 0.5) / 0.5; fx = L * (u - 0.5); lift = Math.sin(Math.PI * u) * liftMax; ang = lerp(0.28, -0.1, u); }
+    fx = lerp(fx, standX, S); lift *= (1 - S); ang = lerp(ang, 0.02, S);
+    return { fx, lift, ang };
   }
+  function ikLeg(g, hipy, lp, col, w1, w2) {
+    const dx0 = lp.fx, dy0 = (RIG.hipY - RIG.ank) - lp.lift;
+    let dx = dx0, dy = dy0, d = Math.hypot(dx, dy);
+    const m = RIG.th + RIG.sh - 1; if (d > m) { dx *= m / d; dy *= m / d; d = m; }
+    const a = Math.atan2(dy, dx);
+    const ac = Math.acos(clamp((RIG.th * RIG.th + d * d - RIG.sh * RIG.sh) / (2 * RIG.th * d), -1, 1));
+    const ka = a - ac; // زانو به جلو
+    const kx = RIG.th * Math.cos(ka), ky = hipy + RIG.th * Math.sin(ka);
+    const ax = dx, ay = hipy + dy;
+    g.strokeStyle = col; g.lineCap = 'round'; g.lineJoin = 'round';
+    g.lineWidth = w1; g.beginPath(); g.moveTo(0, hipy); g.lineTo(kx, ky); g.stroke();
+    g.lineWidth = w2; g.beginPath(); g.moveTo(kx, ky); g.lineTo(ax, ay); g.stroke();
+    g.save(); g.translate(ax, ay + 2); g.rotate(lp.ang);
+    g.beginPath();
+    if (g.roundRect) g.roundRect(-18, -8, 80, 15, 7); else g.rect(-18, -8, 80, 15);
+    g.fillStyle = col; g.fill(); g.restore();
+    return { ax, ay };
+  }
+  function swingArm(g, shY, a1, bend, col, w) {
+    const ex = 6 + Math.sin(a1) * RIG.ua, ey = shY + Math.cos(a1) * RIG.ua;
+    const a2 = a1 + bend;
+    const hx = ex + Math.sin(a2) * RIG.fa, hy = ey + Math.cos(a2) * RIG.fa;
+    g.strokeStyle = col; g.lineCap = 'round'; g.lineWidth = w;
+    g.beginPath(); g.moveTo(6, shY); g.lineTo(ex, ey); g.lineTo(hx, hy); g.stroke();
+    return { hx, hy };
+  }
+  // فیگور کامل روی ctx با مبدأ کف زمین؛ برمی‌گرداند {fxN} برای افکت برخورد پا
+  function drawFigure(g, t, o) {
+    const { A, S, v, beat } = o;
+    const phi = t / RIG.T;
+    const L = v * RIG.T / 2, liftMax = 30 * A + 7;
+    const bob = -A * 7 * (0.5 + 0.5 * Math.cos(TAU * (2 * phi - 0.5)));
+    const lean = 0.035 * A + 0.015 + (beat ? 0.004 * Math.sin(t * 0.9) : 0);
+    const breath = beat ? Math.sin(t * 1.9) : 0;
+    const hipY = -RIG.hipY + bob, shY = -RIG.shY + bob + breath * 1.5, headY = -RIG.headC + bob + breath * 2;
+    const xo = (y) => -y * lean; // خمیدگی ملایم به جلو
+    const pN = ((phi % 1) + 1) % 1, pF = ((phi + 0.5) % 1);
+    const near = legPose(pN, L, S, liftMax, 16), far = legPose(pF, L, S, liftMax, -16);
+    const DARK = '#0a0e13', FARD = '#151b23';
+    // دست دور (تاب مخالف پا)
+    const sw = A * 0.5 * Math.sin(TAU * phi + Math.PI) + (beat ? 0.06 * Math.sin(t * 0.8) : 0);
+    swingArm(g, shY, sw, 0.5 + 0.25 * A * Math.sin(TAU * phi + 2), '#1b2430', 28);
+    // پای دور
+    ikLeg(g, hipY, far, '#1b2430', 38, 28);
+    // بارانی (کت بلند) با دنبالهٔ لبه
+    const hs = -(v * 0.06) - 8 * A * Math.sin(TAU * phi + 1.3);
+    const cg = g.createLinearGradient(0, shY, 0, -180);
+    cg.addColorStop(0, '#10161d'); cg.addColorStop(1, '#070b10');
+    g.fillStyle = cg;
+    g.beginPath();
+    g.moveTo(xo(shY) - 34, shY);
+    g.quadraticCurveTo(xo(-450) + 40, -450, xo(-300) + 48 + hs * 0.3, -300);
+    g.lineTo(xo(-160) + 58 + hs * 0.4, -160);
+    g.lineTo(xo(-160) - 62 + hs, -154);
+    g.quadraticCurveTo(xo(-450) - 46, -450, xo(shY) - 36, shY - 8);
+    g.closePath(); g.fill();
+    // یقه/شال
+    g.fillStyle = '#1a222c'; g.beginPath(); g.ellipse(xo(shY) + 4, shY - 6, 30, 16, -0.2, 0, TAU); g.fill();
+    // سر + مو (گوجه‌ای پشت سر)
+    g.fillStyle = DARK;
+    g.beginPath(); g.arc(xo(headY) + 6, headY, RIG.headR, 0, TAU); g.fill();
+    g.beginPath(); g.arc(xo(headY) - 34, headY - 14, 17, 0, TAU); g.fill();
+    g.strokeStyle = DARK; g.lineWidth = 26; g.beginPath(); g.moveTo(xo(headY), headY + 32); g.lineTo(xo(shY) + 2, shY); g.stroke();
+    // پای نزدیک
+    ikLeg(g, hipY, near, DARK, 44, 34);
+    // دست نزدیک + چتر
+    const ex = 6 + 50, ey = shY + 98, hnx = ex + 24, hny = ey - 90 + bob * 0.4;
+    g.strokeStyle = DARK; g.lineCap = 'round'; g.lineWidth = 32;
+    g.beginPath(); g.moveTo(6, shY); g.lineTo(ex, ey); g.stroke();
+    g.lineWidth = 28; g.beginPath(); g.moveTo(ex, ey); g.lineTo(hnx, hny); g.stroke();
+    g.fillStyle = DARK; g.beginPath(); g.arc(hnx, hny, 12, 0, TAU); g.fill();
+    const tb = -0.10 - 0.02 * Math.sin(t * 1.1) - A * 0.04; // چتر کمی به عقب
+    const tx = hnx + Math.sin(tb) * 262, ty = hny - Math.cos(tb) * 262;
+    g.strokeStyle = '#2a3440'; g.lineWidth = 5;
+    g.beginPath(); g.moveTo(hnx, hny + 16); g.lineTo(tx, ty); g.stroke();
+    g.save(); g.translate(tx, ty); g.rotate(tb * 1.6);
+    g.fillStyle = 'rgba(215,238,255,.30)';
+    g.beginPath(); g.moveTo(-192, 14);
+    g.quadraticCurveTo(-150, -78, 0, -92); g.quadraticCurveTo(150, -78, 192, 14);
+    for (let i = 4; i >= 1; i--) g.quadraticCurveTo(i * 76.8 - 38.4, 26, (i - 1) * 76.8 - 192, 14);
+    g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(225,245,255,.6)'; g.lineWidth = 2.6; g.stroke();
+    g.strokeStyle = 'rgba(220,242,255,.35)'; g.lineWidth = 1.6;
+    for (let i = 0; i <= 4; i++) { g.beginPath(); g.moveTo(0, -80); g.lineTo(i * 76.8 - 153.6, 12); g.stroke(); }
+    g.strokeStyle = '#2a3440'; g.lineWidth = 4; g.beginPath(); g.moveTo(0, -92); g.lineTo(0, -108); g.stroke();
+    g.restore();
+    return { fxN: near.fx, pN, hnx, hny, tx, ty };
+  }
+
+  // ---------------- بوم خارج‌صفحه‌ای فیگور + تینت ریملایت ----------------
+  const F = {};
+  function initFigure() {
+    F.fc = document.createElement('canvas'); F.fc.width = 700; F.fc.height = 1000;
+    F.g = F.fc.getContext('2d');
+    F.cyan = document.createElement('canvas'); F.cyan.width = 700; F.cyan.height = 1000; F.cg = F.cyan.getContext('2d');
+    F.mag = document.createElement('canvas'); F.mag.width = 700; F.mag.height = 1000; F.mg = F.mag.getContext('2d');
+  }
+  const tint = (g, src, col) => {
+    g.globalCompositeOperation = 'source-over'; g.clearRect(0, 0, 700, 1000);
+    g.drawImage(src, 0, 0); g.globalCompositeOperation = 'source-in';
+    g.fillStyle = col; g.fillRect(0, 0, 700, 1000); g.globalCompositeOperation = 'source-over';
+  };
 
   return {
     init(IMG) {
-      U.assertGlyphs('Vazirmatn-Medium', 'شبِ نئون تهران ۲۰۷ ادامه دارد… بازسازی یک سکانس سینمایی', '96_neon_rain');
-      // کلید پردهٔ سبز + برش bounding-box (یک‌بار) برای استِ نمای نزدیک
-      const key = (src) => {
-        const cv = document.createElement('canvas'); cv.width = src.width; cv.height = src.height;
-        const g = cv.getContext('2d', { willReadFrequently: true });
-        g.drawImage(src, 0, 0);
-        const im = g.getImageData(0, 0, cv.width, cv.height), d = im.data;
-        let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
-        for (let i = 0; i < d.length; i += 4) {
-          const r = d[i], gg = d[i + 1], b = d[i + 2], gn = gg - Math.max(r, b);
-          if (gn > 42) d[i + 3] = 0;
-          else if (gn > 16) d[i + 3] = Math.round(255 * (1 - (gn - 16) / 26));
-          if (d[i + 3] > 0 && gg > Math.max(r, b)) d[i + 1] = Math.min(gg, Math.max(r, b) + 26);
-          if (d[i + 3] > 12) { const p = i / 4, px = p % cv.width, py = (p / cv.width) | 0;
-            if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py; }
-        }
-        g.putImageData(im, 0, 0);
-        const w = x1 - x0 + 1, h = y1 - y0 + 1, cc = document.createElement('canvas');
-        cc.width = w; cc.height = h; cc.getContext('2d').drawImage(cv, x0, y0, w, h, 0, 0, w, h);
-        return { cv: cc, w, h };
-      };
-      SPR.stand = key(IMG['img/hero_green.png']);
+      U.assertGlyphs('Vazirmatn-Medium', 'شبِ نئون تهران ۲۰۷۷ ادامه دارد… بازسازی یک سکانس سینمایی', '96_neon_rain');
+      initFigure();
     },
     draw(c, lt0, t) {
       const cam = camAt(t), IM = window.IMG;
       c.fillStyle = '#05070c'; c.fillRect(0, 0, W, H);
-      // هالهٔ نور شهر پشت همه‌چیز
       const glow = c.createRadialGradient(W * 0.62, 430, 60, W * 0.62, 430, 1200);
       glow.addColorStop(0, 'rgba(60,140,190,.34)'); glow.addColorStop(0.5, 'rgba(150,60,140,.16)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = glow; c.fillRect(0, 0, W, H);
 
-      // L1 شهر (کاشی آینه‌ای بی‌نهایت)
+      // L1 شهر (mirror-wrap برای تراکینگ)
       layer(c, cam, 0.9, () => {
         const im = IM['img/city_bg.jpg'], s = cover(im);
-        mtile(c, cam, 0.9, im, im.width * s, im.height * s, 540 - im.height * s / 2);
+        wrapImg(c, cam, 0.9, im, 960 - im.width * s / 2, 540 - im.height * s / 2, im.width * s, im.height * s, true);
       });
       // L2 مه دور
-      layer(c, cam, 0.96, () => fog(c, cam, 0.96, t, IM['img/fog_tile.png'], 330, 1.5, 0.14, 26, 3));
-      // L3 نئون (screen) + سوسو — این هم آینه‌ای اسکرول می‌شود
+      layer(c, cam, 0.96, () => fog(c, cam, t, IM['img/fog_tile.png'], 330, 1.5, 0.14, 26, 3));
+      // L3 نئون (screen) + سوسو
       const flick = 0.78 + 0.22 * Math.abs(Math.sin(t * 11.3) * Math.sin(t * 5.7 + 1));
       const drop = (t > 4.2 && t < 4.42) || (t > 11.4 && t < 11.55) ? 0.35 : 1;
       layer(c, cam, 1, () => {
         c.save(); c.globalCompositeOperation = 'screen'; c.globalAlpha = 0.85 * flick * drop;
         const n = IM['img/neon_layer.png'], s = 1.28;
-        mtile(c, cam, 1, n, n.width * s, n.height * s, 540 - n.height * s / 2 - 60);
+        wrapImg(c, cam, 1, n, 960 - n.width * s / 2 - 120, 540 - n.height * s / 2 - 60, n.width * s, n.height * s, false);
         c.restore();
       });
       // L3.5 ماشین‌های پرنده
-      layer(c, cam, 1.02, () => cars(c, t, cam.x * 1.02 + 960 * -0.02));
-      // L4 قهرمان: ریگ راه‌رفتن + دوربین دنبال‌کننده (نمای A) / استِ فوتورئال ایستاده+تنفس (نمای B)
+      layer(c, cam, 1.02, () => cars(c, t));
+      // L4 قهرمان: ریگ اسکلتی رویه‌ای — راه‌رفتنhuman‌وار + ترمز + ایستادن/تنفس
       layer(c, cam, 1.12, () => {
-        if (cam.beat === 0) {
-          // انعکاس خیسِ ریگ
-          c.save(); c.globalAlpha = 0.20; c.translate(0, 1013 * 1.42); c.scale(1, -0.42);
-          walker(c, cam.heroX, t); c.restore();
-          walker(c, cam.heroX, t);
-        } else {
-          const spr = SPR.stand, hx = 1346, s = 800 / spr.h;
-          const fy = 1005 + Math.sin(t * 1.6) * 2;
-          const lean = 0.006 * Math.sin(t * 0.9);
-          c.save(); c.globalAlpha = 0.22; c.translate(hx, fy + 8); c.scale(s, -s * 0.42); c.rotate(-lean);
-          c.drawImage(spr.cv, -spr.w / 2, 0); c.restore();
-          c.save(); c.translate(hx, fy); c.rotate(lean); c.scale(s, s * (1 + 0.005 * Math.sin(t * 1.9)));
-          c.drawImage(spr.cv, -spr.w / 2, -spr.h); c.restore();
-          c.save(); c.strokeStyle = 'rgba(190,220,255,.5)'; c.lineWidth = 2;
-          for (let i = 0; i < 3; i++) { const q = (t * 1.4 + i * 0.37) % 1, dx = hx - 118 + i * 96; c.globalAlpha = (1 - q) * 0.5; c.beginPath(); c.moveTo(dx, fy - 470 + q * 60); c.lineTo(dx, fy - 462 + q * 60); c.stroke(); }
-          c.restore();
+        const beat = cam.beat, v = cam.v;
+        const A = clamp(v / VMAX, 0, 1), S = clamp((1 - v / VMAX) * 1.25 - 0.25, 0, 1);
+        F.g.clearRect(0, 0, 700, 1000);
+        F.g.save(); F.g.translate(350, 960);
+        const info = drawFigure(F.g, t, { A, S, v, beat });
+        F.g.restore();
+        // نور محیطی ظریف روی سیلوئت
+        F.g.globalCompositeOperation = 'source-atop';
+        const eg = F.g.createLinearGradient(0, 40, 0, 960);
+        eg.addColorStop(0, 'rgba(130,210,255,.16)'); eg.addColorStop(0.6, 'rgba(255,120,220,.08)'); eg.addColorStop(1, 'rgba(0,0,0,0)');
+        F.g.fillStyle = eg; F.g.fillRect(0, 0, 700, 1000);
+        F.g.globalCompositeOperation = 'source-over';
+        tint(F.cg, F.fc, '#7de8ff'); tint(F.mg, F.fc, '#ff5fd0');
+        const s = 0.85, hx = beat ? EX : heroX(t), fy = 1005;
+        const dw = 700 * s, dh = 1000 * s;
+        // انعکاس خیس
+        c.save(); c.globalAlpha = 0.2; c.translate(hx, fy + 4); c.scale(s, -s * 0.48);
+        c.drawImage(F.fc, -350, -960); c.restore();
+        // ریملایت نئون (دو لبهٔ رنگی)
+        c.save(); c.globalCompositeOperation = 'lighter';
+        c.globalAlpha = 0.65; c.drawImage(F.cyan, hx - 350 * s - 5, fy - 960 * s - 3, dw, dh);
+        c.globalAlpha = 0.45; c.drawImage(F.mag, hx - 350 * s + 5, fy - 960 * s - 3, dw, dh);
+        c.restore();
+        // فیگور
+        c.drawImage(F.fc, hx - 350 * s, fy - 960 * s, dw, dh);
+        // برخورد پاشنه به آب
+        if (A > 0.25 && info.pN < 0.12) {
+          const q = info.pN / 0.12, fxw = hx + info.fxN * s;
+          c.save(); c.globalAlpha = (1 - q) * 0.5 * A; c.strokeStyle = 'rgba(200,235,255,.7)'; c.lineWidth = 2;
+          c.beginPath(); c.ellipse(fxw, fy + 2, 6 + q * 26, (6 + q * 26) * 0.26, 0, 0, TAU); c.stroke(); c.restore();
         }
+        // چکه از لبهٔ چتر
+        c.save(); c.strokeStyle = 'rgba(190,220,255,.5)'; c.lineWidth = 2;
+        for (let i = 0; i < 3; i++) {
+          const q = (t * 1.4 + i * 0.37) % 1, dx = hx + (info.tx - 350 + (i - 1) * 130) * s;
+          c.globalAlpha = (1 - q) * 0.5;
+          c.beginPath(); c.moveTo(dx, fy + (info.ty - 960 + 20) * s + q * 60); c.lineTo(dx, fy + (info.ty - 960 + 28) * s + q * 60); c.stroke();
+        }
+        c.restore();
       });
       // L5 باران نزدیک + برخورد
-      layer(c, cam, 1.22, () => {
-        const cx = cam.x * 1.22 + 960 * -0.22;
-        rain(c, t, 130, 1.15, 34, 0.34, 11, cx); splashes(c, t, cx);
-      });
+      layer(c, cam, 1.22, () => { rain(c, cam, t, 130, 1.15, 34, 0.34, 11); splashes(c, t); });
       // L6 مه نزدیک
-      layer(c, cam, 1.3, () => fog(c, cam, 1.3, t * 1.6, IM['img/fog_tile.png'], 700, 2.2, 0.11, 46, 9));
-      // باران دور روی همه (ظریف)
-      rain(c, t, 90, 0.8, 20, 0.16, 31, 960);
+      layer(c, cam, 1.3, () => fog(c, cam, t * 1.6, IM['img/fog_tile.png'], 700, 2.2, 0.11, 46, 9));
+      rain(c, cam, t, 90, 0.8, 20, 0.16, 31);
 
-      // ---- انعکاس نئون در آب کف خیابون (اسلایس‌های موج‌دار، با اسکرول دوربین) ----
+      // ---- انعکاس نئون در آب کف خیابون ----
       c.save(); c.globalCompositeOperation = 'screen'; c.globalAlpha = 0.14;
-      const n2 = IM['img/neon_layer.png'], scrol = (cam.x - 970) * 0.6;
+      const n2 = IM['img/neon_layer.png'];
       for (let i = 0; i < 10; i++) {
-        const sy = H - 30 - i * 26, off = Math.sin(t * 2.1 + i * 0.9) * (3 + i * 1.4) - (scrol % 300);
+        const sy = H - 30 - i * 26, off = Math.sin(t * 2.1 + i * 0.9) * (3 + i * 1.4);
         c.drawImage(n2, 0, n2.height * (0.55 + i * 0.04), n2.width, n2.height * 0.05, 360 + off, sy, 1200, 22);
       }
       c.restore();
 
-      // ---- اسکن‌لاین هولوگرام + گرید سینمایی ----
+      // ---- اسکن‌لاین + گرید ----
       c.save(); c.globalAlpha = 0.05; c.fillStyle = '#000';
       for (let y = 0; y < H; y += 5) c.fillRect(0, y, W, 1.6);
       c.restore();
@@ -265,7 +308,6 @@ SCENES['96_neon_rain'] = (() => {
       c.fillStyle = vg; c.fillRect(0, 0, W, H);
       c.drawImage(P.grain('nr', 0.05, [20, 25, 35], 0.22), 0, 0);
 
-      // ---- برش نما ----
       if (cam.beat === 1 && cam.lt < 0.16) { c.fillStyle = `rgba(220,240,255,${0.55 * (1 - cam.lt / 0.16)})`; c.fillRect(0, 0, W, H); }
 
       // ---- لترباکس + متن ----
