@@ -1,2 +1,5 @@
 
 lab-results/
+node_modules/
+art-motion-test/out/
+art-motion-test/.cache/

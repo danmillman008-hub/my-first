@@ -1,0 +1,13 @@
+{
+  "name": "art-motion-test",
+  "private": true,
+  "type": "module",
+  "description": "Test rig for the huashu-art-motion skill: headless renderer + live preview server (no Chromium, no ffmpeg on PATH required)",
+  "scripts": {
+    "render": "node render.mjs",
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.10"
+  }
+}
