@@ -42,23 +42,14 @@ export function woffToTtf(buf) {
 
 function readBuf(url) { return fs.readFileSync(resolveUrl(url)); }
 
-// ---- Image with browser src/onload/decode semantics, but a real napi Image underneath
-// so ctx.drawImage() accepts it.
+// ---- Image: browser src/onload/decode semantics on top of napi's native loader
+// (native src accepts a file path and fires onload; width/height are native getters).
 class ImageShim extends napi.Image {
-  constructor() { super(); this._src = ''; this._pending = null; this.complete = false; this.onload = null; this.onerror = null; }
   set src(v) {
-    this._src = v; this.complete = false;
-    const p = (async () => {
-      const im = await loadImage(readBuf(v));
-      Object.defineProperty(this, 'width', { value: im.width, configurable: true });
-      Object.defineProperty(this, 'height', { value: im.height, configurable: true });
-      this.naturalWidth = im.width; this.naturalHeight = im.height; this.complete = true;
-    })();
-    this._pending = p.then(() => { this._pending = null; this.onload && this.onload({ target: this }); },
-      (e) => { this._pending = null; this.onerror ? this.onerror(e) : console.error('[image]', this._src, e.message); });
+    try { super.src = resolveUrl(v); }
+    catch (e) { queueMicrotask(() => (this.onerror ? this.onerror(e) : console.error('[image]', v, e.message))); }
   }
-  get src() { return this._src; }
-  async decode() { if (this._pending) await this._pending; if (!this.complete) throw new Error('decode failed: ' + this._src); return this; }
+  get src() { return super.src; }
 }
 
 class FontFaceShim {
