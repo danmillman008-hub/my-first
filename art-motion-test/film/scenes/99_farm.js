@@ -185,11 +185,12 @@ SCENES['99_farm'] = (() => {
       px(g, x, y - 6, 3, 1, C.collar);
       return;
     }
-    const ps = [0, 0.5, 0.5, 0]; // trot جفت‌های قطری
+    // پاهای چهارگانهٔ مفصل‌دار (IK): زانوهای عقب جلو، زانوهای جلو عقب — گام تُروت قطری
+    const ps = [0, 0.5, 0.5, 0];
     for (let i = 0; i < 4; i++) {
-      const a = 0.55 * Math.sin(TAU * (t * 3.4) + ps[i] * TAU);
-      const hx = x - 5 + i * 3.4;
-      ln(g, hx, y - 4 + bob, hx + Math.sin(a) * 3.4, y, 1.8, i % 2 ? C.dogDk : C.dog);
+      const hx = x - 5 + i * 3.4, th = TAU * (t * 3.4) + ps[i] * TAU;
+      const lift = Math.max(0, Math.cos(th)) * 1.6;
+      ik(g, hx, y - 4 + bob, hx + Math.sin(th) * 3.6, y - lift, 2.8, 2.8, i < 2 ? 1 : -1, 1.8, i % 2 ? C.dogDk : C.dog);
     }
     px(g, x - 6, y - 7 + bob, 12, 4, C.dog); px(g, x - 6, y - 4 + bob, 12, 1, C.dogDk);
     px(g, x - 2, y - 6 + bob, 5, 2, C.dogW);
@@ -200,11 +201,15 @@ SCENES['99_farm'] = (() => {
   }
 
   // ---------------- گاو ----------------
-  function cow(g, x, y, t, eat, id) {
+  function cow(g, x, y, t, eat, id, mv) {
     const tail = Math.sin(t * 2 + id) * 2;
     const chew = eat && Math.floor(t * 6) % 2;
-    for (const [lx, col] of [[-11, C.cowWSh], [-5, C.cowWSh], [3, C.cowWSh], [9, C.cowWSh]])
-      px(g, x + lx, y - 6, 3, 6, col);
+    // پاهای مفصل‌دار: گامِ آرام چهارضرب هنگام راه رفتن، جابه‌جایی وزن در ایستادن
+    const psi = t * 1.1 + id * 0.3, offs = [0, 0.5, 0.25, 0.75];
+    for (const [i, lx] of [-11, -5, 3, 9].entries()) {
+      const amp = mv ? 2.4 : 0.5, lift = mv ? Math.max(0, Math.cos(TAU * (psi + offs[i]))) * 1.7 : 0;
+      ik(g, x + lx + 1, y - 7, x + lx + 1 + Math.sin(TAU * (psi + offs[i])) * amp, y - lift, 3.6, 3.6, 1, 3, C.cowWSh);
+    }
     px(g, x - 14, y - 18, 28, 13, C.cowW); px(g, x - 14, y - 7, 28, 2, C.cowWSh);
     cir(g, x - 6, y - 13, 4, C.cowP); cir(g, x + 5, y - 10, 3, C.cowP2); cir(g, x + 9, y - 15, 2.5, C.cowP);
     ln(g, x + 14, y - 16, x + 16, y - 10 + tail, 1.4, C.cowWSh); px(g, x + 15, y - 10 + tail, 2, 2, C.cowP2); // دم
@@ -221,11 +226,17 @@ SCENES['99_farm'] = (() => {
   }
 
   // ---------------- گوسفند ----------------
-  function sheep(g, x, y, t, eat, id, small) {
+  function sheep(g, x, y, t, eat, id, small, mv) {
     const s = small ? 0.62 : 1;
-    g.save(); g.translate(x, y); g.scale(s, s);
+    const hop = small && (t % 2.6) < 0.5 ? -Math.sin((t % 2.6) / 0.5 * Math.PI) * 2.4 : 0;
+    g.save(); g.translate(x, y + hop); g.scale(s, s);
     const chew = eat && Math.floor(t * 7 + id) % 2;
-    for (const lx of [-6, -2, 3, 6]) px(g, lx, -5, 2, 5, C.sheepF);
+    // پاهای باریک مفصل‌دار + قدم‌ریز چرا
+    const psi = t * 0.9 + id * 0.4, offs = [0, 0.5, 0.25, 0.75];
+    for (const [i, lx] of [-6, -2, 3, 6].entries()) {
+      const amp = mv ? 1.6 : eat ? 0.7 : 0.3, lift = (mv || eat) ? Math.max(0, Math.cos(TAU * (psi + offs[i]))) * (mv ? 1.4 : 0.7) : 0;
+      ik(g, lx + 1, -6, lx + 1 + Math.sin(TAU * (psi + offs[i])) * amp, -lift, 3, 3, 1, 2, C.sheepF);
+    }
     cir(g, -4, -10, 5, C.sheepW); cir(g, 2, -11, 5.5, C.sheepW); cir(g, 7, -9, 4.5, C.sheepWSh); cir(g, 0, -8, 5, C.sheepW);
     cir(g, 1, -13, 3, C.sheepW);                                            // پشم بالای سر
     const hy = eat ? -4 + (chew ? 1 : 0) : -10 + Math.sin(t * 1.7 + id) * 0.6;
@@ -309,10 +320,15 @@ SCENES['99_farm'] = (() => {
       chick(g, 128, 236, t, 1); chick(g, 146, 240, t, 2); chick(g, 205, 238, t, 3);
       // گاوها
       const cowEat = t > 6.9 && t < 11.5;
-      cow(g, 376, GY, t, cowEat, 1); cow(g, 408, GY, t, cowEat, 2);
-      // گوسفندها
+      const c1x = t < 0.6 ? 344 : t < 4.6 ? 344 + 8 * (t - 0.6) : 376;
+      cow(g, c1x, GY, t, cowEat, 1, t > 0.6 && t < 4.6);
+      cow(g, 408, GY, t, cowEat, 2, false);
+      // گوسفندها (قدم‌ریزِ چرا به سمت صاحب مزرعه)
       const shEat = t > 14.5 && t < 18.6;
-      sheep(g, 536, GY, t, shEat, 1); sheep(g, 572, GY, t, shEat, 2); sheep(g, 602, GY, t, shEat, 3); sheep(g, 620, GY, t, shEat, 4, true);
+      for (const [i, b] of [536, 572, 602, 620].entries()) {
+        const t0 = 1 + (i + 1) * 0.8;
+        sheep(g, b - clamp((t - t0) * 1.4, 0, 12), GY, t, shEat, i + 1, i === 3, t > t0 && t < t0 + 8.6 && !shEat);
+      }
       // سگ
       const dogSit = st.mode !== 'walk';
       dog(g, fx + 20, GY, t, dogSit);
